@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <!-- Tailwind for UI styling and layout -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React runtime for UI rendering -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Chart.js for radar chart rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Inline CSS partial (Apps Script include) -->
+  <?!= include('style'); ?>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased p-4 md:p-8">
+  <div id="root"></div>
+  <!-- Inject web app URL so javascript.html can build absolute links -->
+  <script>var APP_URL = '<?!= appUrl ?>';</script>
+  <script>
+    var INITIAL_VIEW = '<?!= initialView ?>';
+    var INITIAL_TRAINING_PAGE = '<?!= initialPage ?>';
+  </script>
+  <script id="training-data" type="application/json"><?!= JSON.stringify(getAllTrainingPageData()) ?></script>
+  <!-- Inline JavaScript partial (Apps Script include) -->
+  <?!= include('javascript'); ?>
+</body>
+</html>

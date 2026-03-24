@@ -1,0 +1,1225 @@
+<script type="text/babel">
+const { useEffect, useMemo, useRef, useState } = React;
+
+const LOGO_PATH = "M56.25 160.53c2.02-4.64 2.84-9.39 2.43-14.33a46.054 46.054 0 0 0-4.26-15.85c-3.71-7.88-7.7-15.62-11.57-23.42-2.83-5.71-5.5-11.47-7.07-17.7-2.67-10.57 1.12-18.79 8.97-25.63 3.77-3.29 8.16-5.62 12.5-8.02 4.51-2.5 8.96-5.11 12.3-9.19 1.96-2.4 3.58-5 4.27-8.08.69-3.05-.66-5.52-3.64-6.46-3.77-1.19-7.51-.55-11.08.74-15.04 5.4-24.55 15.78-27.93 31.54-.23 1.07-.31 2.16-.52 3.24 0-3.19.46-6.32 1.45-9.36 3.2-9.91 9.8-17.11 18.31-22.73 5.57-3.68 11.61-6.34 18.29-7.14 2.24-.27 4.64-.18 6.84.31 4.7 1.04 6.68 4.83 5.45 9.89-1.42 5.81-4.47 10.79-8.41 15.14-3.98 4.4-8.36 8.43-12.55 12.64-4.22 4.24-7.63 9.03-10.16 14.48-1.76 3.79-1.91 7.74-1.45 11.74 1.1 9.36 4.59 18.08 7.38 26.98 1.96 6.25 3.93 12.51 4.79 19.02.91 6.93.86 13.77-2.9 20.05-.46.7-.96 1.41-1.44 2.14z";
+
+function gsCall(method, ...args) {
+  return new Promise((resolve, reject) => {
+    try {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler((err) => reject(err))
+        [method](...args);
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+const TRAINING_DATA = JSON.parse(document.getElementById('training-data')?.textContent || '{}');
+
+const TRAINING_PAGE_ORDER = [
+  { key: 'index', label: 'Induction Guide' },
+  { key: 'foundation', label: 'Foundation Station' },
+  { key: 'cutting', label: 'Cutting Station' },
+  { key: 'sewing', label: 'Sewing Station' },
+  { key: 'heading', label: 'Heading Station' },
+  { key: 'taping', label: 'Taping Station' },
+  { key: 'pressing', label: 'Pressing Station' },
+  { key: 'pelmet', label: 'Pelmet Station' },
+  { key: 'romans', label: 'Roman Blind Station' },
+  { key: 'cushion', label: 'Cushion Station' },
+  { key: 'qc', label: 'Quality Control Station' }
+];
+
+const TRAINING_STATION_MAP = [
+  { pageKey: 'foundation', code: 'FDN', globalStart: 0 },
+  { pageKey: 'cutting', code: 'CUT', globalStart: 18 },
+  { pageKey: 'sewing', code: 'SEW', globalStart: 33 },
+  { pageKey: 'heading', code: 'HDG', globalStart: 61 },
+  { pageKey: 'taping', code: 'TAP', globalStart: 77 },
+  { pageKey: 'pressing', code: 'PRD', globalStart: 89 },
+  { pageKey: 'pelmet', code: 'PEL', globalStart: 100 },
+  { pageKey: 'romans', code: 'ROM', globalStart: 110 },
+  { pageKey: 'cushion', code: 'CSH', globalStart: 121 },
+  { pageKey: 'qc', code: 'QCT', globalStart: 133 }
+];
+
+const TRAINING_REGISTRY = (function buildTrainingRegistry() {
+  const registry = {};
+  TRAINING_STATION_MAP.forEach(({ pageKey, code, globalStart }) => {
+    const stationData = TRAINING_DATA[pageKey] || {};
+    const categories = stationData.questions || [];
+    let localIdx = 0;
+    registry[pageKey] = [];
+
+    categories.forEach((category) => {
+      const items = category.items || category.questions || [];
+      items.forEach((questionText) => {
+        registry[pageKey].push({
+          questionId: `${code}-Q${String(localIdx + 1).padStart(3, '0')}`,
+          globalIndex: globalStart + localIdx,
+          categoryTitle: category.title || category.name || '',
+          questionText
+        });
+        localIdx += 1;
+      });
+    });
+  });
+  return registry;
+})();
+
+function TrainingView({ onBack, initialPage }) {
+  const safeInitialPage = TRAINING_PAGE_ORDER.some((item) => item.key === initialPage) ? initialPage : 'index';
+  const [activePage, setActivePage] = useState(safeInitialPage);
+  const [activeSection, setActiveSection] = useState('overview');
+  const [answers, setAnswers] = useState({});
+  const [employees, setEmployees] = useState([]);
+  const [employeeName, setEmployeeName] = useState('');
+  const [saveStatus, setSaveStatus] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const pageData = TRAINING_DATA[activePage] || TRAINING_DATA.index || {};
+
+  useEffect(() => {
+    setActiveSection('overview');
+    setAnswers({});
+    setSaveStatus('');
+  }, [activePage]);
+
+  useEffect(() => {
+    gsCall('getEmployeeNames')
+      .then((names) => setEmployees(names || []))
+      .catch(() => setEmployees([]));
+  }, []);
+
+  function renderList(items) {
+    return (
+      <ul className="list-disc pl-5 space-y-1 text-sm text-slate-700">
+        {(items || []).map((item, idx) => (
+          <li key={idx} dangerouslySetInnerHTML={{ __html: String(item || '') }}></li>
+        ))}
+      </ul>
+    );
+  }
+
+  function toggleAnswer(question, value) {
+    setAnswers((prev) => ({
+      ...prev,
+      [question]: prev[question] === value ? undefined : value
+    }));
+  }
+
+  async function saveAnswers() {
+    if (!employeeName) {
+      setSaveStatus('Please select an employee first.');
+      return;
+    }
+
+    const stationLabel = TRAINING_PAGE_ORDER.find((p) => p.key === activePage)?.label || activePage;
+    const stationQuestions = TRAINING_REGISTRY[activePage] || [];
+    const payload = stationQuestions.map((q) => ({
+      questionId: q.questionId,
+      globalIndex: q.globalIndex,
+      categoryTitle: q.categoryTitle,
+      question: q.questionText,
+      answer: answers[q.questionText] || ''
+    }));
+
+    if (!payload.some((item) => item.answer)) {
+      setSaveStatus('No answers to save.');
+      return;
+    }
+
+    setSaving(true);
+    setSaveStatus('');
+    try {
+      const res = await gsCall('saveTrainingAnswers', employeeName, stationLabel, payload);
+      if (res && res.error) throw new Error(res.error.message || 'Failed to save answers.');
+      setSaveStatus('Saved successfully.');
+    } catch (err) {
+      setSaveStatus(err && err.message ? err.message : 'Failed to save answers.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const sectionConfig = useMemo(() => {
+    if (activePage === 'index') {
+      return [
+        { key: 'overview', label: 'Overview' },
+        { key: 'foundation', label: 'Foundation Modules' },
+        { key: 'core', label: 'Core Skills' },
+        { key: 'delivery', label: 'Delivery' },
+        { key: 'scoring', label: 'Scoring Guide' }
+      ];
+    }
+    if (activePage === 'foundation') {
+      return [
+        { key: 'overview', label: 'Overview' },
+        { key: 'structure', label: 'Assessment Structure' },
+        { key: 'phases', label: 'Assessment Phases' },
+        { key: 'questions', label: 'Questions' }
+      ];
+    }
+    return [
+      { key: 'overview', label: 'Overview' },
+      { key: 'modules', label: 'Modules' },
+      { key: 'phases', label: 'Assessment Phases' },
+      { key: 'questions', label: 'Questions' }
+    ];
+  }, [activePage]);
+
+  function renderQuestionSection(categories, questionKey) {
+    return (
+      <div className="space-y-6">
+        {(categories || []).map((category, idx) => {
+          const items = category[questionKey] || [];
+          const answered = items.filter((q) => answers[q] === 'yes' || answers[q] === 'no').length;
+          return (
+            <div key={idx} className="bg-slate-50 border rounded-xl p-4">
+              <h4 className="text-sm font-bold text-slate-700 mb-3">{category.title || category.name}</h4>
+              <div className="text-[11px] text-slate-500 mb-2">{answered}/{items.length} answered</div>
+              <div className="space-y-2">
+                {items.map((item, itemIdx) => {
+                  const answer = answers[item];
+                  return (
+                    <div key={itemIdx} className="flex items-start justify-between gap-3 border rounded-lg p-3 bg-white">
+                      <div className="text-sm text-slate-700" dangerouslySetInnerHTML={{ __html: String(item || '') }}></div>
+                      <div className="flex gap-1 shrink-0">
+                        <button
+                          onClick={() => toggleAnswer(item, 'yes')}
+                          className={`px-3 py-1 rounded-full text-[11px] font-bold border ${answer === 'yes' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-300'}`}
+                        >
+                          Yes
+                        </button>
+                        <button
+                          onClick={() => toggleAnswer(item, 'no')}
+                          className={`px-3 py-1 rounded-full text-[11px] font-bold border ${answer === 'no' ? 'bg-rose-600 text-white border-rose-600' : 'bg-white text-slate-600 border-slate-300'}`}
+                        >
+                          No
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function renderSectionContent() {
+    if (activePage === 'index') {
+      if (activeSection === 'overview') {
+        return (
+          <>
+            <h3 className="text-xl font-bold text-slate-800 mb-3">Program Overview</h3>
+            <p className="text-sm text-slate-700 mb-4">{pageData.guide?.introduction}</p>
+            {renderList(pageData.guide?.uses || [])}
+          </>
+        );
+      }
+      if (activeSection === 'foundation') {
+        return (
+          <>
+            <h3 className="text-xl font-bold text-slate-800 mb-3">Foundation Modules</h3>
+            <div className="space-y-3">
+              {(pageData.foundationModules?.modules || []).map((module, idx) => (
+                <div key={idx} className="border rounded-xl p-4 bg-white">
+                  <div className="text-sm font-bold text-slate-800">{module.code} - {module.title}</div>
+                  <div className="text-sm text-slate-600 mt-1">{module.description || module.purpose}</div>
+                </div>
+              ))}
+            </div>
+          </>
+        );
+      }
+      if (activeSection === 'core') {
+        return (
+          <>
+            <h3 className="text-xl font-bold text-slate-800 mb-3">Core Skills</h3>
+            <div className="space-y-3">
+              {(pageData.coreSkills?.modules || []).map((module, idx) => (
+                <div key={idx} className="border rounded-xl p-4 bg-white">
+                  <div className="text-sm font-bold text-slate-800">{module.code} - {module.title}</div>
+                  <div className="text-sm text-slate-600 mt-1">{module.purpose}</div>
+                </div>
+              ))}
+            </div>
+          </>
+        );
+      }
+      if (activeSection === 'delivery') {
+        return (
+          <>
+            <h3 className="text-xl font-bold text-slate-800 mb-3">Delivery</h3>
+            {renderList(pageData.delivery?.phases || [])}
+          </>
+        );
+      }
+      return (
+        <>
+          <h3 className="text-xl font-bold text-slate-800 mb-3">Scoring Guide</h3>
+          <div className="space-y-2">
+            {(pageData.scoring?.levels || []).map((level, idx) => (
+              <div key={idx} className="border rounded-lg p-3 bg-white text-sm text-slate-700">
+                <span className="font-bold">Score {level.score} - {level.label}:</span> {level.description}
+              </div>
+            ))}
+          </div>
+        </>
+      );
+    }
+
+    if (activePage === 'foundation') {
+      if (activeSection === 'overview') {
+        return (
+          <>
+            <h3 className="text-xl font-bold text-slate-800 mb-3">Foundation Overview</h3>
+            <p className="text-sm text-slate-700 mb-4">{pageData.overview?.introduction}</p>
+            {renderList(pageData.overview?.purposes || [])}
+          </>
+        );
+      }
+      if (activeSection === 'structure') {
+        return (
+          <>
+            <h3 className="text-xl font-bold text-slate-800 mb-3">Assessment Structure</h3>
+            <p className="text-sm text-slate-700 mb-4">{pageData.structure?.intro}</p>
+            <div className="space-y-2">
+              {(pageData.structure?.categories || []).map((cat, idx) => (
+                <div key={idx} className="border rounded-lg p-3 bg-white text-sm text-slate-700">
+                  <span className="font-bold">{cat.title}:</span> {cat.description}
+                </div>
+              ))}
+            </div>
+          </>
+        );
+      }
+      if (activeSection === 'phases') {
+        return (
+          <>
+            <h3 className="text-xl font-bold text-slate-800 mb-3">Assessment Phases</h3>
+            <div className="space-y-3">
+              {(pageData.phases || []).map((phase, idx) => (
+                <div key={idx} className="border rounded-xl p-4 bg-white">
+                  <div className="text-sm font-bold text-slate-800">{idx + 1}. {phase.title}</div>
+                  <p className="text-sm text-slate-600 mt-1">{phase.description}</p>
+                  <div className="mt-2">{renderList(phase.activities || [])}</div>
+                </div>
+              ))}
+            </div>
+          </>
+        );
+      }
+      return renderQuestionSection(pageData.questions || [], 'questions');
+    }
+
+    if (activeSection === 'overview') {
+      return (
+        <>
+          <h3 className="text-xl font-bold text-slate-800 mb-3">Overview</h3>
+          <p className="text-sm text-slate-700 mb-4">{pageData.overview?.introduction}</p>
+          {renderList(pageData.overview?.purposes || [])}
+        </>
+      );
+    }
+    if (activeSection === 'modules') {
+      return (
+        <>
+          <h3 className="text-xl font-bold text-slate-800 mb-3">Modules</h3>
+          <div className="space-y-3">
+            {(pageData.modules || []).map((module, idx) => (
+              <div key={idx} className="border rounded-xl p-4 bg-white">
+                <div className="text-sm font-bold text-slate-800">{module.code} - {module.title}</div>
+                <div className="text-sm text-slate-600 mt-1">{module.description}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      );
+    }
+    if (activeSection === 'phases') {
+      return (
+        <>
+          <h3 className="text-xl font-bold text-slate-800 mb-3">Assessment Phases</h3>
+          <div className="space-y-3">
+            {(pageData.phases || []).map((phase, idx) => (
+              <div key={idx} className="border rounded-xl p-4 bg-white">
+                <div className="text-sm font-bold text-slate-800">{idx + 1}. {phase.title}</div>
+                <p className="text-sm text-slate-600 mt-1">{phase.description}</p>
+                <div className="mt-2">{renderList(phase.activities || [])}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      );
+    }
+    return renderQuestionSection(pageData.questions || [], 'items');
+  }
+
+  const title = pageData.guide?.title || pageData.station?.name || 'Staff Training';
+  const subtitle = pageData.guide?.subtitle || pageData.station?.subtitle || 'Philipcowan Interiors';
+
+  return (
+    <div className="bg-white rounded-2xl border shadow-sm overflow-hidden">
+      <div className="p-4 md:p-6 border-b bg-slate-50 flex flex-wrap items-center gap-3 justify-between">
+        <div>
+          <h2 className="text-lg font-bold text-slate-800">{title}</h2>
+          <p className="text-xs text-slate-500">{subtitle}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={employeeName}
+            onChange={(e) => setEmployeeName(e.target.value)}
+            className="px-3 py-2 border rounded-lg text-sm"
+          >
+            <option value="">Select employee...</option>
+            {employees.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+          <button onClick={onBack} className="px-3 py-2 bg-slate-100 text-[11px] font-bold uppercase rounded-lg">Back to Dashboard</button>
+        </div>
+      </div>
+
+      <div className="p-4 md:p-6 border-b bg-white">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
+          {TRAINING_PAGE_ORDER.map((item) => (
+            <button
+              key={item.key}
+              onClick={() => setActivePage(item.key)}
+              className={`px-3 py-2 rounded-lg text-[11px] font-bold uppercase border text-left ${activePage === item.key ? 'bg-sky-600 text-white border-sky-600' : 'bg-white text-slate-600 border-slate-200'}`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="px-4 md:px-6 pt-4 border-b bg-white flex gap-2 flex-wrap">
+        {sectionConfig.map((section) => (
+          <button
+            key={section.key}
+            onClick={() => setActiveSection(section.key)}
+            className={`px-3 py-2 text-[11px] font-bold uppercase rounded-t-lg border ${activeSection === section.key ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}
+          >
+            {section.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="p-4 md:p-6 bg-slate-50">
+        {renderSectionContent()}
+        {activeSection === 'questions' && activePage !== 'index' && (
+          <div className="mt-6 pt-4 border-t flex items-center gap-3 flex-wrap">
+            <button
+              onClick={saveAnswers}
+              disabled={saving}
+              className={`px-4 py-2 rounded-full text-[11px] font-bold uppercase ${saving ? 'bg-slate-400 text-white' : 'bg-sky-600 text-white'}`}
+            >
+              {saving ? 'Saving...' : 'Save Results'}
+            </button>
+            {saveStatus ? <span className="text-xs font-semibold text-slate-600">{saveStatus}</span> : null}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [loading, setLoading] = useState(true);
+  const [loadingText, setLoadingText] = useState('Loading analytics...');
+  const [error, setError] = useState(null);
+  const [data, setData] = useState(null);
+
+  const [view, setView] = useState(window.INITIAL_VIEW === 'training' ? 'training' : 'dashboard');
+  const [activeEmp, setActiveEmp] = useState('');
+  const [activeStation, setActiveStation] = useState('MACHINES');
+  const [heatmapMode, setHeatmapMode] = useState('machine');
+  const [heatmapSection, setHeatmapSection] = useState('ALL');
+
+  const [manage, setManage] = useState({
+    activeEmp: '',
+    stationIndex: 0,
+    skills: {},
+    lastUpdated: '',
+    status: '',
+    statusType: 'info'
+  });
+
+  const canvasRef = useRef(null);
+  const radarChartRef = useRef(null);
+
+  const scoreMax = data?.scoreMax || 5;
+  const target = data?.target || 4;
+
+  const stationSkillsMap = useMemo(() => {
+    if (!data) return {};
+    const map = {};
+    data.stationList.forEach((station) => {
+      map[station.code] = data.skillMap.filter((skill) => skill.station === station.code);
+    });
+    return map;
+  }, [data]);
+
+  const selectedEmp = useMemo(() => {
+    if (!data || !activeEmp) return null;
+    return data.employees.find((emp) => emp.name === activeEmp) || null;
+  }, [data, activeEmp]);
+
+  const manageStation = useMemo(() => {
+    if (!data || !data.stationList.length) return null;
+    const idx = Math.max(0, Math.min(data.stationList.length - 1, manage.stationIndex));
+    return data.stationList[idx] || null;
+  }, [data, manage.stationIndex]);
+
+  useEffect(() => {
+    loadUnifiedData();
+  }, []);
+
+  useEffect(() => {
+    if (!data || view !== 'dashboard' || !selectedEmp || !canvasRef.current) {
+      if (radarChartRef.current) {
+        radarChartRef.current.destroy();
+        radarChartRef.current = null;
+      }
+      return;
+    }
+
+    const context = canvasRef.current.getContext('2d');
+    const scoped = getRadarSeries(selectedEmp, activeStation);
+
+    if (radarChartRef.current) {
+      radarChartRef.current.destroy();
+    }
+
+    radarChartRef.current = new Chart(context, {
+      type: 'radar',
+      data: {
+        labels: scoped.labels,
+        datasets: [
+          {
+            label: 'Score',
+            data: scoped.scores,
+            backgroundColor: 'rgba(14, 165, 233, 0.2)',
+            borderColor: 'rgb(14, 165, 233)',
+            borderWidth: 2
+          },
+          {
+            label: 'Target',
+            data: scoped.labels.map(() => target),
+            borderColor: 'rgba(244, 63, 94, 0.4)',
+            borderDash: [5, 5],
+            fill: false
+          }
+        ]
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          r: {
+            min: 0,
+            max: scoreMax,
+            ticks: { stepSize: 1 }
+          }
+        }
+      }
+    });
+
+    return () => {
+      if (radarChartRef.current) {
+        radarChartRef.current.destroy();
+        radarChartRef.current = null;
+      }
+    };
+  }, [view, selectedEmp, activeStation, data, scoreMax, target]);
+
+  async function loadUnifiedData() {
+    setLoadingText('Loading analytics...');
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await gsCall('getUnifiedData');
+      if (res && res.error) {
+        throw new Error(res.error.message || 'Failed to load analytics data.');
+      }
+      setData(res);
+      if (!activeEmp && res?.employees?.length) {
+        setActiveEmp(res.employees[0].name);
+      }
+      setManage((prev) => ({
+        ...prev,
+        activeEmp: prev.activeEmp || (res?.employees?.[0]?.name || '')
+      }));
+    } catch (err) {
+      setError({
+        message: 'Failed to load analytics data.',
+        details: err && err.message ? err.message : String(err)
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function setManageStatus(message, type = 'info') {
+    setManage((prev) => ({ ...prev, status: message, statusType: type }));
+  }
+
+  function getScopedSkills(stationCode) {
+    if (!data) return [];
+    if (stationCode === 'MACHINES' || stationCode === 'MACHINES_ALL') {
+      return data.skillMap.filter((skill) => skill.isMachine);
+    }
+    if (stationCode === 'ALL') return data.skillMap;
+    return data.skillMap.filter((skill) => skill.station === stationCode);
+  }
+
+  function getRadarSeries(emp, stationCode) {
+    if (!data) return { labels: [], scores: [] };
+
+    if (stationCode === 'MACHINES') {
+      const top6 = data.skillMap
+        .filter((skill) => skill.isMachine)
+        .map((skill) => ({
+          label: skill.label,
+          score: emp.individualSkills[skill.code] || 0
+        }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 6);
+
+      return {
+        labels: top6.map((item) => item.label),
+        scores: top6.map((item) => item.score)
+      };
+    }
+
+    if (stationCode === 'MACHINES_ALL') {
+      const allMachines = data.skillMap
+        .filter((skill) => skill.isMachine)
+        .map((skill) => ({
+          label: skill.label,
+          score: emp.individualSkills[skill.code] || 0
+        }));
+
+      return {
+        labels: allMachines.map((item) => item.label),
+        scores: allMachines.map((item) => item.score)
+      };
+    }
+
+    if (stationCode === 'ALL') {
+      const labels = data.stationList.map((station) => station.name);
+      const scores = data.stationList.map((station) => {
+        const stationSkills = data.skillMap.filter((skill) => skill.station === station.code);
+        const total = stationSkills.reduce((sum, skill) => sum + (emp.individualSkills[skill.code] || 0), 0);
+        return Math.floor(total / (stationSkills.length || 1));
+      });
+      return { labels, scores };
+    }
+
+    const stationSkills = data.skillMap.filter((skill) => skill.station === stationCode);
+    return {
+      labels: stationSkills.map((skill) => skill.label),
+      scores: stationSkills.map((skill) => emp.individualSkills[skill.code] || 0)
+    };
+  }
+
+  const tableRows = useMemo(() => {
+    if (!data || !selectedEmp) return [];
+    return getScopedSkills(activeStation).map((skill) => {
+      const val = selectedEmp.individualSkills[skill.code] || 0;
+      const gap = (val - target).toFixed(1);
+      return { skill, val, gap };
+    });
+  }, [data, selectedEmp, activeStation, target]);
+
+  const insights = useMemo(() => {
+    if (!data || !selectedEmp) {
+      return { strengths: [], gaps: [] };
+    }
+
+    const isSection = data.stationList.some((station) => station.code === activeStation);
+    const isMachinesAll = activeStation === 'MACHINES_ALL';
+
+    let scoped = data.skillMap;
+    if (isSection) scoped = scoped.filter((skill) => skill.station === activeStation);
+    if (isMachinesAll) scoped = scoped.filter((skill) => skill.isMachine);
+
+    const withScores = scoped.map((skill) => ({
+      ...skill,
+      score: selectedEmp.individualSkills[skill.code] || 0
+    }));
+
+    const machineCount = 2;
+    const skillCount = isSection ? 2 : 1;
+
+    const mStrengths = withScores.filter((s) => s.isMachine).sort((a, b) => b.score - a.score).slice(0, machineCount);
+    const sStrengths = withScores.filter((s) => !s.isMachine).sort((a, b) => b.score - a.score).slice(0, skillCount);
+    const mGaps = withScores.filter((s) => s.isMachine).sort((a, b) => a.score - b.score).slice(0, machineCount);
+    const sGaps = withScores.filter((s) => !s.isMachine).sort((a, b) => a.score - b.score).slice(0, skillCount);
+
+    return {
+      strengths: [...mStrengths, ...sStrengths],
+      gaps: [...mGaps, ...sGaps]
+    };
+  }, [data, selectedEmp, activeStation]);
+
+  const heatmapColumns = useMemo(() => {
+    if (!data) return [];
+    if (heatmapMode === 'section') {
+      return heatmapSection === 'ALL'
+        ? data.stationList
+        : data.stationList.filter((station) => station.code === heatmapSection);
+    }
+
+    return data.skillMap.filter(
+      (skill) => skill.isMachine && (heatmapSection === 'ALL' || skill.station === heatmapSection)
+    );
+  }, [data, heatmapMode, heatmapSection]);
+
+  function getHeatmapScore(emp, col) {
+    if (!data) return 0;
+    if (heatmapMode === 'section') {
+      const skills = data.skillMap.filter((skill) => skill.station === col.code);
+      const total = skills.reduce((sum, skill) => sum + (emp.individualSkills[skill.code] || 0), 0);
+      return Math.floor(total / (skills.length || 1));
+    }
+    return emp.individualSkills[col.code] || 0;
+  }
+
+  function getHeatmapCellClass(score) {
+    if (!data) return 'bg-slate-100 text-slate-400';
+    if (score >= data.expertThreshold) return 'bg-emerald-500 text-white';
+    if (score >= 3) return 'bg-emerald-200 text-emerald-800';
+    if (score >= 1) return 'bg-amber-100 text-amber-700';
+    return 'bg-slate-100 text-slate-400';
+  }
+
+  function isManageStationComplete(stationCode) {
+    const stationSkills = stationSkillsMap[stationCode] || [];
+    if (!stationSkills.length) return false;
+    return stationSkills.every((skill) => (manage.skills[skill.code] || 0) > 0);
+  }
+
+  const manageProgress = useMemo(() => {
+    if (!data || !data.stationList.length) return 0;
+    const completed = data.stationList.filter((station) => isManageStationComplete(station.code)).length;
+    return Math.round((completed / data.stationList.length) * 100);
+  }, [data, manage.skills, stationSkillsMap]);
+
+  async function loadManageEmployee(empName) {
+    if (!empName) return;
+    setManageStatus('Loading employee data...', 'info');
+    setLoadingText('Loading employee...');
+    setLoading(true);
+    try {
+      const res = await gsCall('getEmployeeRecord', empName);
+      if (res && res.error) {
+        throw new Error(res.error.message || 'Failed to load employee data.');
+      }
+      setManage((prev) => ({
+        ...prev,
+        activeEmp: empName,
+        skills: res.skills || {},
+        lastUpdated: res.lastUpdated || '',
+        status: 'Employee data ready for edit.',
+        statusType: 'success'
+      }));
+    } catch (err) {
+      setManageStatus(err && err.message ? err.message : 'Failed to load employee data.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refreshUnifiedData(callback) {
+    try {
+      const res = await gsCall('getUnifiedData');
+      if (res && res.error) {
+        throw new Error(res.error.message || 'Failed to refresh data.');
+      }
+      setData(res);
+      if (callback) callback(res);
+    } catch (err) {
+      setManageStatus(err && err.message ? err.message : 'Failed to refresh data.', 'error');
+    }
+  }
+
+  async function addNewEmployee() {
+    const input = document.getElementById('manageNewName');
+    const name = (input?.value || '').trim();
+    if (!name) {
+      setManageStatus('Enter an employee name before adding.', 'error');
+      return;
+    }
+
+    setManageStatus('Adding new employee...', 'info');
+    setLoadingText('Adding employee...');
+    setLoading(true);
+    try {
+      const res = await gsCall('addNewEmployee', name);
+      if (res && res.error) {
+        throw new Error(res.error.message || 'Failed to add employee.');
+      }
+
+      if (input) input.value = '';
+      await refreshUnifiedData((fresh) => {
+        setManage((prev) => ({
+          ...prev,
+          activeEmp: name,
+          stationIndex: 0,
+          skills: {},
+          status: 'Employee added. All stations start at 0.',
+          statusType: 'success'
+        }));
+        if (!activeEmp && fresh?.employees?.length) {
+          setActiveEmp(fresh.employees[0].name);
+        }
+      });
+      await loadManageEmployee(name);
+    } catch (err) {
+      setManageStatus(err && err.message ? err.message : 'Failed to add employee.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveManageChanges() {
+    if (!manage.activeEmp) {
+      setManageStatus('Select an employee before saving.', 'error');
+      return;
+    }
+
+    setManageStatus('Saving changes...', 'info');
+    setLoadingText('Saving changes...');
+    setLoading(true);
+    try {
+      const res = await gsCall('updateEmployeeSkills', manage.activeEmp, null, manage.skills);
+      if (res && res.error) {
+        throw new Error(res.error.message || 'Failed to save changes.');
+      }
+
+      await refreshUnifiedData();
+      setManageStatus('Changes saved to spreadsheet.', 'success');
+    } catch (err) {
+      setManageStatus(err && err.message ? err.message : 'Failed to save changes.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteEmployeeRowServer() {
+    if (!manage.activeEmp) {
+      setManageStatus('Select an employee before deleting.', 'error');
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete the latest row for ${manage.activeEmp}? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setManageStatus('Deleting employee row...', 'info');
+    setLoadingText('Deleting employee row...');
+    setLoading(true);
+    try {
+      const res = await gsCall('deleteEmployeeRow', manage.activeEmp);
+      if (res && res.error) {
+        throw new Error(res.error.message || 'Failed to delete employee row.');
+      }
+
+      await refreshUnifiedData();
+      setManage((prev) => ({
+        ...prev,
+        activeEmp: '',
+        skills: {},
+        lastUpdated: '',
+        status: 'Employee row deleted.',
+        statusType: 'success'
+      }));
+    } catch (err) {
+      setManageStatus(err && err.message ? err.message : 'Failed to delete employee row.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function updateManageSkill(code, value) {
+    const numeric = Number(value) || 0;
+    setManage((prev) => ({
+      ...prev,
+      skills: {
+        ...prev.skills,
+        [code]: numeric
+      }
+    }));
+  }
+
+  function openTraining() {
+    setView('training');
+  }
+
+  function downloadCurrentView() {
+    window.print();
+  }
+
+  function renderDynamicControls() {
+    if (!data) return null;
+
+    if (view === 'heatmap') {
+      return (
+        <>
+          <button
+            onClick={() => setHeatmapMode((prev) => (prev === 'section' ? 'machine' : 'section'))}
+            className="px-4 py-2 bg-slate-100 text-[11px] font-bold uppercase rounded border hover:bg-slate-200"
+          >
+            Type: {heatmapMode === 'section' ? 'Section Averages' : 'Machine Heatmap'}
+          </button>
+          <select
+            value={heatmapSection}
+            onChange={(e) => setHeatmapSection(e.target.value)}
+            className="px-4 py-2 bg-slate-100 text-[11px] font-bold uppercase rounded border outline-none"
+          >
+            <option value="ALL">All Sections</option>
+            {data.stationList.map((station) => (
+              <option key={station.code} value={station.code}>{station.name}</option>
+            ))}
+          </select>
+        </>
+      );
+    }
+
+    if (view === 'manage') {
+      return null;
+    }
+
+    if (view === 'training') {
+      return null;
+    }
+
+    return (
+      <>
+        <select
+          value={activeEmp}
+          onChange={(e) => setActiveEmp(e.target.value)}
+          className="p-2.5 border rounded-lg bg-white text-sm"
+        >
+          <option value="">Select Employee...</option>
+          {data.employees.map((emp) => (
+            <option key={emp.name} value={emp.name}>{emp.name}</option>
+          ))}
+        </select>
+        <select
+          value={activeStation}
+          onChange={(e) => setActiveStation(e.target.value)}
+          className="p-2.5 border rounded-lg bg-white text-sm"
+        >
+          <option value="MACHINES">Top 6 Machines</option>
+          <option value="MACHINES_ALL">All Machines</option>
+          <option value="ALL">All Stations</option>
+          {data.stationList.map((station) => (
+            <option key={station.code} value={station.code}>{station.name}</option>
+          ))}
+        </select>
+      </>
+    );
+  }
+
+  const manageStationSkills = manageStation ? (stationSkillsMap[manageStation.code] || []) : [];
+
+  return (
+    <>
+      <div className={`loading-overlay ${loading ? '' : 'hidden'}`}>
+        <div className="loading-card">
+          <div className="spinner" aria-hidden="true"></div>
+          <div className="text-sm font-semibold text-slate-700">{loadingText}</div>
+        </div>
+      </div>
+
+      <div id="printArea" className="max-w-[1600px] mx-auto">
+        <header className="mb-6 flex flex-col xl:flex-row justify-between items-center border-b pb-4 gap-4 no-print">
+          <div className="flex items-center gap-4">
+            <svg width="48" height="48" viewBox="0 0 160 160" fill="currentColor" className="text-slate-700">
+              <path d={LOGO_PATH} />
+            </svg>
+            <div>
+              <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Philip Cowan Analytics</h1>
+              <div className="flex gap-2 mt-2 flex-wrap">
+                <button onClick={() => setView('dashboard')} className={`app-nav-btn ${view === 'dashboard' ? 'is-active' : ''}`}>Individual Dashboard</button>
+                <button onClick={() => setView('heatmap')} className={`app-nav-btn ${view === 'heatmap' ? 'is-active' : ''}`}>Factory Heatmap</button>
+                <button onClick={() => setView('manage')} className={`app-nav-btn ${view === 'manage' ? 'is-active' : ''}`}>Manage-Staff</button>
+                <button onClick={openTraining} className={`app-nav-btn ${view === 'training' ? 'is-active' : ''}`}>Staff-Training</button>
+                <button onClick={downloadCurrentView} className="ml-2 px-4 py-1.5 bg-slate-800 text-white text-[10px] font-bold uppercase rounded-full hover:bg-black">Download PDF</button>
+              </div>
+            </div>
+          </div>
+          <div id="dynamicHeaderControls" className="flex flex-wrap gap-3 items-end">
+            {renderDynamicControls()}
+          </div>
+        </header>
+
+        <main id="captureTarget">
+          {error ? (
+            <div className="bg-rose-50 border border-rose-200 text-rose-800 p-4 rounded-xl">
+              <div className="font-bold text-sm">Data Load Failed</div>
+              <div className="text-xs mt-1">{error.message || 'Unknown error.'}</div>
+              {error.details ? <div className="text-[10px] mt-2 text-rose-600">{error.details}</div> : null}
+            </div>
+          ) : null}
+
+          {view === 'dashboard' && !error && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-4 md:gap-6">
+              <div className="md:col-span-1 lg:col-span-7 space-y-4 md:space-y-6">
+                <div className="bg-white p-4 md:p-6 rounded-2xl border shadow-sm h-64 md:h-96 lg:h-[450px] radar-card">
+                  <div className="text-[9px] text-slate-400 text-right font-mono italic mb-2">
+                    {selectedEmp ? `LAST SYNC: ${selectedEmp.lastUpdated}` : ''}
+                  </div>
+                  <canvas ref={canvasRef}></canvas>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 no-print">
+                  <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-xl shadow-sm">
+                    <h3 className="text-emerald-800 font-bold text-[10px] uppercase mb-2 tracking-widest">Key Competencies</h3>
+                    {insights.strengths.map((item) => {
+                      const below = item.score < target;
+                      return (
+                        <div key={`s-${item.code}`} className={`p-2 rounded text-[11px] mb-1 border flex justify-between items-center ${below ? 'bg-rose-50 border-rose-200' : 'bg-white/80 border-emerald-100'}`}>
+                          <span>{below ? '⚠️' : '✅'} {item.label}</span>
+                          <span className={`font-bold ${below ? 'text-rose-600' : 'text-emerald-700'}`}>LVL {item.score}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="bg-sky-50 border border-sky-100 p-4 rounded-xl shadow-sm">
+                    <h3 className="text-sky-800 font-bold text-[10px] uppercase mb-2 tracking-widest">Training Priorities</h3>
+                    {insights.gaps.map((gap) => {
+                      const trainers = ((data?.peerExperts?.[gap.code] || []).filter((n) => n !== selectedEmp?.name));
+                      const gapValue = (gap.score - target).toFixed(1);
+                      return (
+                        <div key={`g-${gap.code}`} className="bg-white/80 p-2 rounded text-[11px] mb-1 border border-sky-100">
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="font-medium">💡 {gap.label}</span>
+                            <span className="text-[10px] font-bold text-rose-500">Gap: {gapValue}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-[9px] text-slate-400 uppercase font-bold">Recommended Trainer:</span>
+                            <span className="text-[9px] font-bold text-sky-600 italic">{trainers[0] || 'Internal Course'}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="md:col-span-1 lg:col-span-5 bg-white rounded-2xl border shadow-sm overflow-hidden flex flex-col h-96 md:h-full lg:max-h-[850px]">
+                <div className="overflow-y-auto flex-1">
+                  <table className="w-full text-left text-xs md:text-sm">
+                    <thead className="bg-slate-50 border-b sticky top-0">
+                      <tr>
+                        <th className="px-2 md:p-4 py-2 text-[9px] md:text-[10px] font-bold text-slate-500 uppercase">Skill / Machine</th>
+                        <th className="px-2 md:p-4 py-2 text-[9px] md:text-[10px] font-bold text-slate-500 uppercase text-center">Score</th>
+                        <th className="px-2 md:p-4 py-2 text-[9px] md:text-[10px] font-bold text-slate-500 uppercase text-center font-mono">Gap</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {tableRows.map((row) => (
+                        <tr key={row.skill.code} className="hover:bg-slate-50">
+                          <td className="p-4">
+                            <span className="text-[9px] font-bold text-slate-400 block uppercase">{row.skill.stationName}</span>
+                            {row.skill.label}
+                          </td>
+                          <td className="p-4 text-center font-bold text-slate-800">{row.val}</td>
+                          <td className={`p-4 text-center font-bold ${Number(row.gap) < 0 ? 'text-rose-500' : 'text-emerald-600'}`}>
+                            {Number(row.gap) > 0 ? `+${row.gap}` : row.gap}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {view === 'heatmap' && !error && data && (
+            <div className="bg-white p-2 md:p-4 rounded-2xl border shadow-sm heatmap-container overflow-x-auto">
+              <table className="w-full text-left border-separate border-spacing-0 text-xs md:text-sm">
+                <thead>
+                  <tr>
+                    <th className="p-4 bg-slate-50 border-b font-bold text-[10px] uppercase sticky left-0 z-20">Employee</th>
+                    {heatmapColumns.map((col) => (
+                      <th key={col.code} className="p-4 bg-slate-50 border-b font-bold text-[10px] uppercase text-center">{col.name || col.label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.employees.map((emp) => (
+                    <tr key={emp.name}>
+                      <td className="p-4 border-b font-bold text-[11px] bg-white sticky left-0 z-10 shadow-sm">{emp.name}</td>
+                      {heatmapColumns.map((col) => {
+                        const score = getHeatmapScore(emp, col);
+                        return (
+                          <td key={`${emp.name}-${col.code}`} className="p-2 border-b text-center">
+                            <div className={`w-8 h-8 flex items-center justify-center rounded-lg mx-auto font-bold text-xs ${getHeatmapCellClass(score)}`}>
+                              {score}
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {view === 'manage' && !error && data && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6">
+              <div className="lg:col-span-4 space-y-4">
+                <div className="bg-white p-4 md:p-5 rounded-2xl border shadow-sm">
+                  <h2 className="text-sm font-bold uppercase text-slate-600 tracking-widest">Manage Staff</h2>
+                  <div className="mt-4 space-y-2">
+                    <label className="text-[10px] font-bold uppercase text-slate-500">Add New Employee</label>
+                    <div className="flex gap-2">
+                      <input id="manageNewName" type="text" placeholder="Employee name" className="flex-1 px-3 py-2 border rounded-lg text-sm" />
+                      <button onClick={addNewEmployee} className="px-3 py-2 bg-rose-500 text-white text-[10px] font-bold uppercase rounded-lg">Add</button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 space-y-2">
+                    <label className="text-[10px] font-bold uppercase text-slate-500">Edit Existing</label>
+                    <select
+                      value={manage.activeEmp}
+                      onChange={async (e) => {
+                        const name = e.target.value;
+                        setManage((prev) => ({ ...prev, activeEmp: name, stationIndex: 0, skills: {} }));
+                        if (name) await loadManageEmployee(name);
+                      }}
+                      className="w-full px-3 py-2 border rounded-lg text-sm"
+                    >
+                      <option value="">Select Employee...</option>
+                      {data.employees.map((emp) => (
+                        <option key={`m-${emp.name}`} value={emp.name}>{emp.name}</option>
+                      ))}
+                    </select>
+
+                    <button onClick={deleteEmployeeRowServer} className="w-full px-3 py-2 bg-rose-600 text-white text-[10px] font-bold uppercase rounded-lg">
+                      Delete Employee Row
+                    </button>
+                    <div className="text-[10px] text-slate-400 font-mono italic">
+                      {manage.lastUpdated ? `LAST SYNC: ${manage.lastUpdated}` : ''}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white p-4 md:p-5 rounded-2xl border shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold uppercase text-slate-600">Progress</h3>
+                    <span className="text-[10px] font-bold text-slate-500">{manageProgress}%</span>
+                  </div>
+                  <div className="mt-2 w-full bg-slate-100 rounded-full h-2">
+                    <div className="h-2 rounded-full bg-emerald-500" style={{ width: `${manageProgress}%` }}></div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 mt-3">
+                    {data.stationList.map((station, idx) => {
+                      const complete = isManageStationComplete(station.code);
+                      const state = complete
+                        ? 'bg-emerald-500 text-white border-emerald-500'
+                        : 'bg-rose-50 text-rose-600 border-rose-200';
+                      const active = idx === manage.stationIndex ? ' ring-2 ring-sky-300' : '';
+                      return (
+                        <button
+                          key={station.code}
+                          onClick={() => setManage((prev) => ({ ...prev, stationIndex: idx }))}
+                          className={`px-2 py-2 rounded-lg text-[10px] font-bold uppercase border ${state}${active}`}
+                        >
+                          {station.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="lg:col-span-8 space-y-3">
+                <div className="bg-white p-4 md:p-6 rounded-2xl border shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-slate-700">{manageStation?.name || 'Station'}</h3>
+                    <span className={`text-[10px] font-bold uppercase ${manageStation && isManageStationComplete(manageStation.code) ? 'text-emerald-600' : 'text-rose-600'}`}>
+                      {manageStation ? (isManageStationComplete(manageStation.code) ? 'Complete' : 'Incomplete') : ''}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 space-y-2">
+                    {!manage.activeEmp ? (
+                      <div className="text-[11px] text-slate-400">Select or add an employee to begin.</div>
+                    ) : (
+                      manageStationSkills.map((skill) => {
+                        const val = manage.skills[skill.code] || 0;
+                        const color = val > 0 ? 'border-emerald-200 bg-emerald-50' : 'border-rose-200 bg-rose-50';
+                        return (
+                          <div key={skill.code} className={`flex items-center justify-between gap-3 p-2 border rounded-lg ${color}`}>
+                            <div className="text-[11px] font-medium text-slate-700">{skill.label}</div>
+                            <input
+                              type="number"
+                              min="0"
+                              max={scoreMax}
+                              step="1"
+                              value={val}
+                              onChange={(e) => updateManageSkill(skill.code, e.target.value)}
+                              className="w-20 px-2 py-1 border rounded text-sm text-center"
+                            />
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  <div className="mt-5 flex flex-wrap gap-2 justify-between">
+                    <button
+                      onClick={() => setManage((prev) => ({ ...prev, stationIndex: Math.max(0, prev.stationIndex - 1) }))}
+                      className="px-3 py-2 bg-slate-100 text-[10px] font-bold uppercase rounded-lg"
+                    >
+                      Previous
+                    </button>
+                    <button onClick={saveManageChanges} className="px-4 py-2 bg-sky-600 text-white text-[10px] font-bold uppercase rounded-lg">
+                      Save Changes
+                    </button>
+                    <button
+                      onClick={() => setManage((prev) => ({ ...prev, stationIndex: Math.min((data.stationList.length || 1) - 1, prev.stationIndex + 1) }))}
+                      className="px-3 py-2 bg-slate-100 text-[10px] font-bold uppercase rounded-lg"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+
+                <div className={`text-[11px] font-medium ${manage.statusType === 'error' ? 'text-rose-600' : manage.statusType === 'success' ? 'text-emerald-600' : 'text-slate-500'}`}>
+                  {manage.status}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {view === 'training' && !error && (
+            <TrainingView
+              initialPage={window.INITIAL_TRAINING_PAGE || 'index'}
+              onBack={() => setView('dashboard')}
+            />
+          )}
+
+        </main>
+      </div>
+    </>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>

@@ -1,0 +1,109 @@
+<style>
+  :root {
+    --pc-slate-900: #0f172a;
+    --pc-slate-700: #334155;
+    --pc-slate-600: #475569;
+    --pc-slate-300: #cbd5e1;
+    --pc-sky-600: #0284c7;
+    --pc-sky-500: #0ea5e9;
+  }
+
+  /* Utility helpers */
+  .chart-container { position: relative; margin: auto; }
+  .hidden { display: none !important; }
+
+  /* Shared header button styles used by view switch controls */
+  .app-nav-btn {
+    padding: 0.375rem 1rem;
+    border-radius: 9999px;
+    border: 1px solid var(--pc-slate-300);
+    background: #ffffff;
+    color: var(--pc-slate-600);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+    transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+  }
+
+  .app-nav-btn:hover {
+    border-color: var(--pc-sky-500);
+    color: var(--pc-slate-900);
+    transform: translateY(-1px);
+  }
+
+  .app-nav-btn:focus-visible {
+    outline: 2px solid rgba(14, 165, 233, 0.35);
+    outline-offset: 1px;
+  }
+
+  .app-nav-btn.is-active {
+    border-color: var(--pc-sky-600);
+    background: var(--pc-sky-600);
+    color: #ffffff;
+  }
+
+  .loading-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+  }
+
+  .loading-card {
+    background: white;
+    border-radius: 14px;
+    padding: 16px 20px;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.2);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .spinner {
+    width: 22px;
+    height: 22px;
+    border: 3px solid #e2e8f0;
+    border-top-color: #0ea5e9;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Scrollbar tweaks for large heatmap tables */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+  
+  /* Sticky first column for heatmap readability */
+  #heatmapBody tr td:first-child, #heatmapHead tr th:first-child {
+    position: sticky; left: 0; background-color: white; z-index: 10;
+    border-right: 2px solid #f1f5f9; min-width: 140px;
+  }
+  #heatmapHead tr th:first-child { z-index: 20; background-color: #f8fafc; }
+
+  /* Mobile responsiveness for table cells */
+  @media (max-width: 768px) {
+    #skillTableBody tr td { padding: 0.5rem !important; }
+    .heatmap-container { overflow-x: auto !important; }
+    #heatmapBody tr td, #heatmapHead tr th { padding: 0.25rem !important; }
+  }
+
+  /* Print-optimized layout rules */
+  @media print {
+    .no-print, #dynamicHeaderControls { display: none !important; }
+    body { background: white !important; padding: 0 !important; margin: 0 !important; }
+    .max-w-[1600px] { max-width: 100% !important; width: 100% !important; margin: 0 !important; }
+    .grid { display: block !important; }
+    .md:col-span-1, .lg:col-span-7, .lg:col-span-5 { width: 100% !important; margin-bottom: 2rem; }
+    canvas { max-width: 450px !important; margin: 0 auto; }
+    .heatmap-container { overflow: visible !important; border: none !important; }
+    #heatmapBody tr td:first-child, #heatmapHead tr th:first-child { position: static !important; }
+  }
+</style>
