@@ -439,6 +439,7 @@ function App() {
 
   const [view, setView] = useState(window.INITIAL_VIEW === 'training' ? 'training' : 'dashboard');
   const [activeEmp, setActiveEmp] = useState('');
+  const [trainingEmp, setTrainingEmp] = useState('');
   const [activeStation, setActiveStation] = useState('MACHINES');
   const [heatmapMode, setHeatmapMode] = useState('machine');
   const [heatmapSection, setHeatmapSection] = useState('ALL');
@@ -493,9 +494,13 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (view !== 'training-visuals' || !activeEmp) return;
-    loadTrainingCompletion(activeEmp);
-  }, [view, activeEmp]);
+    if (view !== 'training-visuals') return;
+    if (!trainingEmp) {
+      setTrainingVisuals({ loading: false, error: '', data: null });
+      return;
+    }
+    loadTrainingCompletion(trainingEmp);
+  }, [view, trainingEmp]);
 
   useEffect(() => {
     if (!data || view !== 'dashboard' || !selectedEmp || !canvasRef.current) {
@@ -647,13 +652,6 @@ function App() {
         throw new Error(res.error.message || 'Failed to load analytics data.');
       }
       setData(res);
-      if (!activeEmp && res?.employees?.length) {
-        setActiveEmp(res.employees[0].name);
-      }
-      setManage((prev) => ({
-        ...prev,
-        activeEmp: prev.activeEmp || (res?.employees?.[0]?.name || '')
-      }));
     } catch (err) {
       setError({
         message: 'Failed to load analytics data.',
@@ -830,6 +828,7 @@ function App() {
   }
 
   const criticalTrainingGaps = useMemo(() => {
+    if (!trainingEmp) return [];
     const stations = trainingVisuals?.data?.stations || [];
     if (!stations.length) return [];
 
@@ -850,7 +849,7 @@ function App() {
         const bWeight = Number(b.totalQuestions || 0) * (100 - Number(b.percentage || 0));
         return bWeight - aWeight;
       });
-  }, [trainingVisuals.data]);
+  }, [trainingEmp, trainingVisuals.data]);
 
   function isManageStationComplete(stationCode) {
     const stationSkills = stationSkillsMap[stationCode] || [];
@@ -1056,8 +1055,8 @@ function App() {
       return (
         <>
           <select
-            value={activeEmp}
-            onChange={(e) => setActiveEmp(e.target.value)}
+            value={trainingEmp}
+            onChange={(e) => setTrainingEmp(e.target.value)}
             className="p-2.5 border rounded-lg bg-white text-sm"
           >
             <option value="">Select Employee...</option>
@@ -1066,8 +1065,9 @@ function App() {
             ))}
           </select>
           <button
-            onClick={() => loadTrainingCompletion(activeEmp)}
-            className="px-4 py-2 bg-slate-100 text-[11px] font-bold uppercase rounded border hover:bg-slate-200"
+            onClick={() => loadTrainingCompletion(trainingEmp)}
+            disabled={!trainingEmp}
+            className={`px-4 py-2 text-[11px] font-bold uppercase rounded border ${trainingEmp ? 'bg-slate-100 hover:bg-slate-200' : 'bg-slate-50 text-slate-400 cursor-not-allowed'}`}
           >
             Refresh
           </button>
@@ -1393,13 +1393,21 @@ function App() {
 
           {view === 'training-visuals' && !error && (
             <div className="grid grid-cols-1 gap-5">
+              {!trainingEmp && (
+                <div className="bg-slate-50 border border-slate-200 text-slate-700 p-4 rounded-xl font-medium">
+                  Please select an employee to view training data.
+                </div>
+              )}
+
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-                <div className="lg:col-span-5 bg-white rounded-2xl border shadow-sm p-5">
+                <div className={`lg:col-span-5 bg-white rounded-2xl border shadow-sm p-5 ${trainingEmp ? '' : 'opacity-50'}`}>
                   <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-3">Overall Completion</h3>
                   {trainingVisuals.loading ? (
                     <div className="text-sm text-slate-500">Loading training visuals...</div>
                   ) : trainingVisuals.error ? (
                     <div className="text-sm text-rose-600">{trainingVisuals.error}</div>
+                  ) : !trainingEmp ? (
+                    <div className="text-sm text-slate-500">Please select an employee to view training data.</div>
                   ) : !trainingVisuals.data ? (
                     <div className="text-sm text-slate-500">Select an employee to view training performance.</div>
                   ) : (
@@ -1423,12 +1431,14 @@ function App() {
                   )}
                 </div>
 
-                <div className="lg:col-span-7 bg-white rounded-2xl border shadow-sm p-5">
+                <div className={`lg:col-span-7 bg-white rounded-2xl border shadow-sm p-5 ${trainingEmp ? '' : 'opacity-50'}`}>
                   <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-3">Station Performance</h3>
                   {trainingVisuals.loading ? (
                     <div className="text-sm text-slate-500">Loading chart...</div>
                   ) : trainingVisuals.error ? (
                     <div className="text-sm text-rose-600">{trainingVisuals.error}</div>
+                  ) : !trainingEmp ? (
+                    <div className="text-sm text-slate-500">Please select an employee to view training data.</div>
                   ) : !trainingVisuals.data ? (
                     <div className="text-sm text-slate-500">No station data yet.</div>
                   ) : (
@@ -1439,12 +1449,14 @@ function App() {
                 </div>
               </div>
 
-              <div className="bg-white rounded-2xl border shadow-sm p-5">
+              <div className={`bg-white rounded-2xl border shadow-sm p-5 ${trainingEmp ? '' : 'opacity-50'}`}>
                 <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-3">Critical Gaps</h3>
                 {trainingVisuals.loading ? (
                   <div className="text-sm text-slate-500">Evaluating gaps...</div>
                 ) : trainingVisuals.error ? (
                   <div className="text-sm text-rose-600">{trainingVisuals.error}</div>
+                ) : !trainingEmp ? (
+                  <div className="text-sm text-slate-500">Please select an employee to detect critical gaps.</div>
                 ) : !trainingVisuals.data ? (
                   <div className="text-sm text-slate-500">Select an employee to detect critical gaps.</div>
                 ) : !criticalTrainingGaps.length ? (
@@ -1464,12 +1476,14 @@ function App() {
                 )}
               </div>
 
-              <div className="bg-white rounded-2xl border shadow-sm p-5">
+              <div className={`bg-white rounded-2xl border shadow-sm p-5 ${trainingEmp ? '' : 'opacity-50'}`}>
                 <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-3">Station Breakdown</h3>
                 {trainingVisuals.loading ? (
                   <div className="text-sm text-slate-500">Loading table...</div>
                 ) : trainingVisuals.error ? (
                   <div className="text-sm text-rose-600">{trainingVisuals.error}</div>
+                ) : !trainingEmp ? (
+                  <div className="text-sm text-slate-500">Please select an employee to view training data.</div>
                 ) : !trainingVisuals.data ? (
                   <div className="text-sm text-slate-500">Select an employee to see station details.</div>
                 ) : (
