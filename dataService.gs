@@ -345,6 +345,8 @@ function getEmployeeTrainingCompletion(employeeName) {
   try {
     validateConfig_();
     const cleanName = safeString_(employeeName);
+    const stationMeta = getTrainingStationMeta_();
+
     if (!cleanName) {
       return { error: { message: 'Employee name is required.' } };
     }
@@ -352,55 +354,29 @@ function getEmployeeTrainingCompletion(employeeName) {
     const ss = SpreadsheetApp.openById(CONFIG.SS_ID);
     const sheet = ss.getSheetByName('Training Responses');
     if (!sheet) {
-      return {
-        employee: cleanName,
-        overall: { totalAnswered: 0, yesCount: 0, noCount: 0, percentage: 0 },
-        stations: getTrainingStationMeta_().map(function(st) {
-          return {
-            stationKey: st.key,
-            stationCode: st.code,
-            stationLabel: st.label,
-            totalAnswered: 0,
-            yesCount: 0,
-            noCount: 0,
-            percentage: 0
-          };
-        })
-      };
+      return buildEmptyTrainingCompletion_(cleanName, stationMeta);
     }
 
     const targetRow = findTrainingResponseRowByName_(sheet, cleanName);
     if (!targetRow) {
-      return {
-        employee: cleanName,
-        overall: { totalAnswered: 0, yesCount: 0, noCount: 0, percentage: 0 },
-        stations: getTrainingStationMeta_().map(function(st) {
-          return {
-            stationKey: st.key,
-            stationCode: st.code,
-            stationLabel: st.label,
-            totalAnswered: 0,
-            yesCount: 0,
-            noCount: 0,
-            percentage: 0
-          };
-        })
-      };
+      return buildEmptyTrainingCompletion_(cleanName, stationMeta);
     }
 
     const lastCol = Math.max(sheet.getLastColumn(), 3);
     const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
     const row = sheet.getRange(targetRow, 1, 1, lastCol).getValues()[0];
 
-    const stationMeta = getTrainingStationMeta_();
     const byCode = {};
     stationMeta.forEach(function(st) {
       byCode[st.code] = {
         stationKey: st.key,
         stationCode: st.code,
         stationLabel: st.label,
+        totalQuestions: st.totalQuestions,
         totalAnswered: 0,
         yesCount: 0,
+        explicitNoCount: 0,
+        blankCount: st.totalQuestions,
         noCount: 0,
         percentage: 0
       };
@@ -418,29 +394,36 @@ function getEmployeeTrainingCompletion(employeeName) {
 
       byCode[stationCode].totalAnswered += 1;
       if (answer === 'yes') byCode[stationCode].yesCount += 1;
-      if (answer === 'no') byCode[stationCode].noCount += 1;
+      if (answer === 'no') byCode[stationCode].explicitNoCount += 1;
     }
 
     const stations = stationMeta.map(function(st) {
       const stats = byCode[st.code];
-      stats.percentage = toPercent_(stats.yesCount, stats.totalAnswered);
+      stats.blankCount = Math.max(stats.totalQuestions - stats.totalAnswered, 0);
+      // Assumption: blank and missing responses are treated as "No".
+      stats.noCount = Math.max(stats.totalQuestions - stats.yesCount, 0);
+      stats.percentage = toPercent_(stats.yesCount, stats.totalQuestions);
       return stats;
     });
 
     const overallTotals = stations.reduce(function(acc, st) {
+      acc.totalQuestions += st.totalQuestions;
       acc.totalAnswered += st.totalAnswered;
       acc.yesCount += st.yesCount;
       acc.noCount += st.noCount;
+      acc.blankCount += st.blankCount;
       return acc;
-    }, { totalAnswered: 0, yesCount: 0, noCount: 0 });
+    }, { totalQuestions: 0, totalAnswered: 0, yesCount: 0, noCount: 0, blankCount: 0 });
 
     return {
       employee: cleanName,
       overall: {
+        totalQuestions: overallTotals.totalQuestions,
         totalAnswered: overallTotals.totalAnswered,
         yesCount: overallTotals.yesCount,
         noCount: overallTotals.noCount,
-        percentage: toPercent_(overallTotals.yesCount, overallTotals.totalAnswered)
+        blankCount: overallTotals.blankCount,
+        percentage: toPercent_(overallTotals.yesCount, overallTotals.totalQuestions)
       },
       stations: stations
     };
@@ -457,17 +440,65 @@ function getEmployeeTrainingCompletion(employeeName) {
 
 function getTrainingStationMeta_() {
   return [
-    { key: 'foundation', code: 'FDN', label: 'Foundation Station' },
-    { key: 'cutting', code: 'CUT', label: 'Cutting Station' },
-    { key: 'sewing', code: 'SEW', label: 'Sewing Station' },
-    { key: 'heading', code: 'HDG', label: 'Heading Station' },
-    { key: 'taping', code: 'TAP', label: 'Taping Station' },
-    { key: 'pressing', code: 'PRD', label: 'Pressing Station' },
-    { key: 'pelmet', code: 'PEL', label: 'Pelmet Station' },
-    { key: 'romans', code: 'ROM', label: 'Roman Blind Station' },
-    { key: 'cushion', code: 'CSH', label: 'Cushion Station' },
-    { key: 'qc', code: 'QCT', label: 'Quality Control Station' }
+    { key: 'foundation', code: 'FDN', label: 'Foundation Station', totalQuestions: getTrainingQuestionCountByPage_('foundation') },
+    { key: 'cutting', code: 'CUT', label: 'Cutting Station', totalQuestions: getTrainingQuestionCountByPage_('cutting') },
+    { key: 'sewing', code: 'SEW', label: 'Sewing Station', totalQuestions: getTrainingQuestionCountByPage_('sewing') },
+    { key: 'heading', code: 'HDG', label: 'Heading Station', totalQuestions: getTrainingQuestionCountByPage_('heading') },
+    { key: 'taping', code: 'TAP', label: 'Taping Station', totalQuestions: getTrainingQuestionCountByPage_('taping') },
+    { key: 'pressing', code: 'PRD', label: 'Pressing Station', totalQuestions: getTrainingQuestionCountByPage_('pressing') },
+    { key: 'pelmet', code: 'PEL', label: 'Pelmet Station', totalQuestions: getTrainingQuestionCountByPage_('pelmet') },
+    { key: 'romans', code: 'ROM', label: 'Roman Blind Station', totalQuestions: getTrainingQuestionCountByPage_('romans') },
+    { key: 'cushion', code: 'CSH', label: 'Cushion Station', totalQuestions: getTrainingQuestionCountByPage_('cushion') },
+    { key: 'qc', code: 'QCT', label: 'Quality Control Station', totalQuestions: getTrainingQuestionCountByPage_('qc') }
   ];
+}
+
+function getTrainingQuestionCountByPage_(pageKey) {
+  const trainingData = typeof TRAINING_PAGE_DATA !== 'undefined'
+    ? TRAINING_PAGE_DATA
+    : (typeof getAllTrainingPageData === 'function' ? getAllTrainingPageData() : {});
+
+  const page = trainingData && trainingData[pageKey] ? trainingData[pageKey] : {};
+  const groups = Array.isArray(page.questions) ? page.questions : [];
+
+  return groups.reduce(function(sum, group) {
+    const items = Array.isArray(group.items) ? group.items : [];
+    const questions = Array.isArray(group.questions) ? group.questions : [];
+    const count = items.length ? items.length : questions.length;
+    return sum + count;
+  }, 0);
+}
+
+function buildEmptyTrainingCompletion_(employeeName, stationMeta) {
+  const stations = stationMeta.map(function(st) {
+    return {
+      stationKey: st.key,
+      stationCode: st.code,
+      stationLabel: st.label,
+      totalQuestions: st.totalQuestions,
+      totalAnswered: 0,
+      yesCount: 0,
+      explicitNoCount: 0,
+      blankCount: st.totalQuestions,
+      noCount: st.totalQuestions,
+      percentage: 0
+    };
+  });
+
+  const totalQuestions = stations.reduce(function(sum, st) { return sum + st.totalQuestions; }, 0);
+
+  return {
+    employee: employeeName,
+    overall: {
+      totalQuestions: totalQuestions,
+      totalAnswered: 0,
+      yesCount: 0,
+      noCount: totalQuestions,
+      blankCount: totalQuestions,
+      percentage: 0
+    },
+    stations: stations
+  };
 }
 
 function toPercent_(numerator, denominator) {
