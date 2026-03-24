@@ -336,3 +336,141 @@ function findTrainingResponseRowByName_(sheet, employeeName) {
 
   return null;
 }
+
+/**
+ * Returns overall and station-level training completion metrics for one employee.
+ * Uses "Training Responses" sheet where each question column stores Yes/No values.
+ */
+function getEmployeeTrainingCompletion(employeeName) {
+  try {
+    validateConfig_();
+    const cleanName = safeString_(employeeName);
+    if (!cleanName) {
+      return { error: { message: 'Employee name is required.' } };
+    }
+
+    const ss = SpreadsheetApp.openById(CONFIG.SS_ID);
+    const sheet = ss.getSheetByName('Training Responses');
+    if (!sheet) {
+      return {
+        employee: cleanName,
+        overall: { totalAnswered: 0, yesCount: 0, noCount: 0, percentage: 0 },
+        stations: getTrainingStationMeta_().map(function(st) {
+          return {
+            stationKey: st.key,
+            stationCode: st.code,
+            stationLabel: st.label,
+            totalAnswered: 0,
+            yesCount: 0,
+            noCount: 0,
+            percentage: 0
+          };
+        })
+      };
+    }
+
+    const targetRow = findTrainingResponseRowByName_(sheet, cleanName);
+    if (!targetRow) {
+      return {
+        employee: cleanName,
+        overall: { totalAnswered: 0, yesCount: 0, noCount: 0, percentage: 0 },
+        stations: getTrainingStationMeta_().map(function(st) {
+          return {
+            stationKey: st.key,
+            stationCode: st.code,
+            stationLabel: st.label,
+            totalAnswered: 0,
+            yesCount: 0,
+            noCount: 0,
+            percentage: 0
+          };
+        })
+      };
+    }
+
+    const lastCol = Math.max(sheet.getLastColumn(), 3);
+    const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    const row = sheet.getRange(targetRow, 1, 1, lastCol).getValues()[0];
+
+    const stationMeta = getTrainingStationMeta_();
+    const byCode = {};
+    stationMeta.forEach(function(st) {
+      byCode[st.code] = {
+        stationKey: st.key,
+        stationCode: st.code,
+        stationLabel: st.label,
+        totalAnswered: 0,
+        yesCount: 0,
+        noCount: 0,
+        percentage: 0
+      };
+    });
+
+    for (let i = 3; i < lastCol; i++) {
+      const questionId = safeString_(headers[i]);
+      if (!questionId) continue;
+
+      const stationCode = safeString_(questionId.split('-')[0]).toUpperCase();
+      if (!byCode[stationCode]) continue;
+
+      const answer = safeString_(row[i]).toLowerCase();
+      if (answer !== 'yes' && answer !== 'no') continue;
+
+      byCode[stationCode].totalAnswered += 1;
+      if (answer === 'yes') byCode[stationCode].yesCount += 1;
+      if (answer === 'no') byCode[stationCode].noCount += 1;
+    }
+
+    const stations = stationMeta.map(function(st) {
+      const stats = byCode[st.code];
+      stats.percentage = toPercent_(stats.yesCount, stats.totalAnswered);
+      return stats;
+    });
+
+    const overallTotals = stations.reduce(function(acc, st) {
+      acc.totalAnswered += st.totalAnswered;
+      acc.yesCount += st.yesCount;
+      acc.noCount += st.noCount;
+      return acc;
+    }, { totalAnswered: 0, yesCount: 0, noCount: 0 });
+
+    return {
+      employee: cleanName,
+      overall: {
+        totalAnswered: overallTotals.totalAnswered,
+        yesCount: overallTotals.yesCount,
+        noCount: overallTotals.noCount,
+        percentage: toPercent_(overallTotals.yesCount, overallTotals.totalAnswered)
+      },
+      stations: stations
+    };
+  } catch (err) {
+    Logger.log(err);
+    return {
+      error: {
+        message: 'Failed to calculate training completion data.',
+        details: err && err.message ? err.message : String(err)
+      }
+    };
+  }
+}
+
+function getTrainingStationMeta_() {
+  return [
+    { key: 'foundation', code: 'FDN', label: 'Foundation Station' },
+    { key: 'cutting', code: 'CUT', label: 'Cutting Station' },
+    { key: 'sewing', code: 'SEW', label: 'Sewing Station' },
+    { key: 'heading', code: 'HDG', label: 'Heading Station' },
+    { key: 'taping', code: 'TAP', label: 'Taping Station' },
+    { key: 'pressing', code: 'PRD', label: 'Pressing Station' },
+    { key: 'pelmet', code: 'PEL', label: 'Pelmet Station' },
+    { key: 'romans', code: 'ROM', label: 'Roman Blind Station' },
+    { key: 'cushion', code: 'CSH', label: 'Cushion Station' },
+    { key: 'qc', code: 'QCT', label: 'Quality Control Station' }
+  ];
+}
+
+function toPercent_(numerator, denominator) {
+  if (!denominator) return 0;
+  return Math.round((numerator / denominator) * 1000) / 10;
+}
